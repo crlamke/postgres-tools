@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SQL Field Matcher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1a1d25;
+    --panel-raised: #20242e;
+    --border: #2b2f3a;
+    --text: #e8eaf0;
+    --text-muted: #8790a3;
+    --text-faint: #5b6274;
+    --field: #6ee7c9;
+    --field-dim: #3d6d61;
+    --value: #f2b866;
+    --value-dim: #7a6238;
+    --danger: #ef6f6f;
+    --danger-bg: #2c1a1c;
+    --focus: #6ee7c9;
+
+    color-scheme: dark;
+  }
+  :root:not([data-theme="dark"]) {
+    /* This tool is intentionally dark-only, like a code editor -- but if a
+       viewer's system requests light, keep contrast sane rather than
+       fighting it silently. */
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+
+  code, .mono, textarea, .pairs, .plist {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+  }
+
+  header {
+    padding: 22px 28px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  h1 {
+    font-size: 21px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+
+  header p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 14px;
+    max-width: 62ch;
+    line-height: 1.5;
+  }
+
+  .field-swatch { color: var(--field); font-weight: 600; }
+  .value-swatch { color: var(--value); font-weight: 600; }
+
+  main {
+    flex: 1;
+    display: flex;
+    background: var(--border);
+    min-height: 0;
+  }
+
+  @media (max-width: 860px) {
+    main { flex-direction: column; }
+  }
+
+  .pane {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    width: 50%;
+    border-right: 1px solid var(--border);
+  }
+  .pane:last-child { border-right: none; }
+  @media (max-width: 860px) {
+    .pane { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+    .pane:last-child { border-bottom: none; }
+  }
+
+  .pane-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pane-title {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .badge {
+    font-size: 12px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .badge.kind-insert { color: var(--field); border-color: var(--field-dim); }
+  .badge.kind-update { color: var(--value); border-color: var(--value-dim); }
+  .badge.kind-error  { color: var(--danger); border-color: #5a2f30; }
+
+  .btn-row { display: flex; gap: 6px; }
+
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  button:hover { background: #262b37; border-color: #3a3f4d; }
+  button:active { background: #1e222c; }
+  button:focus-visible, textarea:focus-visible, a:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+  button.primary {
+    color: #0d1410;
+    background: var(--field);
+    border-color: var(--field);
+  }
+  button.primary:hover { background: #86ecd2; }
+
+  textarea {
+    flex: 1;
+    resize: none;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 13.5px;
+    line-height: 1.6;
+    padding: 16px;
+    white-space: pre;
+    tab-size: 2;
+  }
+  textarea::placeholder { color: var(--text-faint); }
+
+  .output {
+    flex: 1;
+    overflow: auto;
+    padding: 16px;
+  }
+
+  .empty-state {
+    color: var(--text-faint);
+    font-size: 13.5px;
+    line-height: 1.7;
+    max-width: 46ch;
+  }
+
+  .warning {
+    background: var(--danger-bg);
+    border: 1px solid #5a2f30;
+    color: #f3b3b3;
+    font-size: 13px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+
+  .section-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 18px 0 8px;
+    font-family: "Space Grotesk", sans-serif;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  table.pairs {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13.5px;
+  }
+  table.pairs th, table.pairs td {
+    text-align: left;
+    padding: 5px 14px 5px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  table.pairs th {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-family: "Space Grotesk", sans-serif;
+    font-size: 12px;
+    padding-top: 0;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+  }
+  table.pairs .idx {
+    color: var(--text-faint);
+    width: 2em;
+    padding-right: 8px;
+  }
+  table.pairs .fieldname { color: var(--field); }
+  table.pairs td.valuecell { color: var(--value); }
+  table.pairs tr.mismatch td.valuecell { color: var(--danger); }
+  table.pairs td.missing { color: var(--text-faint); font-style: italic; }
+
+  ol.plist {
+    margin: 0;
+    padding-left: 0;
+    list-style: none;
+    font-size: 13.5px;
+    counter-reset: item;
+  }
+  ol.plist li {
+    display: flex;
+    gap: 10px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  ol.plist li .idx { color: var(--text-faint); flex-shrink: 0; width: 1.6em; }
+  ol.plist li .cond { color: var(--value); white-space: pre-wrap; word-break: break-word; }
+
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 13px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  .scrollwrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SQL Field Matcher</h1>
+  <p>Paste a long <code>INSERT</code> or <code>UPDATE</code> statement. Each
+    <span class="field-swatch">field</span> gets lined up with its
+    <span class="value-swatch">value</span>, so you don't have to count commas.</p>
+</header>
+
+<main>
+  <section class="pane">
+    <div class="pane-head">
+      <span class="pane-title">SQL input</span>
+      <div class="btn-row">
+        <button id="exampleBtn" type="button">Load example</button>
+        <button id="clearBtn" type="button">Clear</button>
+      </div>
+    </div>
+    <textarea id="sqlInput" placeholder="INSERT INTO table (col1, col2, ...) VALUES (1, 2, ...);" spellcheck="false"></textarea>
+  </section>
+
+  <section class="pane">
+    <div class="pane-head">
+      <span class="pane-title">Matched fields</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span id="badge" class="badge">no input yet</span>
+        <button id="copyBtn" type="button" class="primary">Copy</button>
+      </div>
+    </div>
+    <div id="output" class="output"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script>
+"use strict";
+
+// =====================================================================
+// Core parser (identical logic to sql-pairer-core.js, tested separately
+// under Node -- inlined here so the page has no external JS dependency).
+// =====================================================================
+
+function findMatchingParen(s, start) {
+  let depth = 0;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (c === "'" || c === '"' || c === "\`") { i = skipQuoted(s, i); continue; }
+    if (c === "$") {
+      const tagEnd = matchDollarQuoteStart(s, i);
+      if (tagEnd !== -1) { i = skipDollarQuoted(s, i, tagEnd); continue; }
+    }
+    if (c === "(") depth++;
+    else if (c === ")") { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+function matchDollarQuoteStart(s, i) {
+  const m = /^\$[A-Za-z0-9_]*\$/.exec(s.slice(i));
+  return m ? i + m[0].length - 1 : -1;
+}
+
+function skipDollarQuoted(s, openDollarIdx, tagEndIdx) {
+  const tag = s.slice(openDollarIdx, tagEndIdx + 1);
+  const closeIdx = s.indexOf(tag, tagEndIdx + 1);
+  return closeIdx === -1 ? s.length - 1 : closeIdx + tag.length - 1;
+}
+
+function skipQuoted(s, i) {
+  const quote = s[i];
+  i++;
+  while (i < s.length) {
+    if (s[i] === quote) {
+      if (quote === "'" && s[i + 1] === "'") { i += 2; continue; }
+      return i;
+    }
+    if (s[i] === "\\" && quote === "'") { i += 2; continue; }
+    i++;
+  }
+  return s.length - 1;
+}
+
+function splitTopLevel(s, separatorRe) {
+  separatorRe = separatorRe || /^,/;
+  const parts = [];
+  let depth = 0;
+  let cur = "";
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'" || c === '"' || c === "\`") {
+      const end = skipQuoted(s, i);
+      cur += s.slice(i, end + 1);
+      i = end + 1;
+      continue;
+    }
+    if (c === "$") {
+      const tagEnd = matchDollarQuoteStart(s, i);
+      if (tagEnd !== -1) {
+        const end = skipDollarQuoted(s, i, tagEnd);
+        cur += s.slice(i, end + 1);
+        i = end + 1;
+        continue;
+      }
+    }
+    if (c === "(") { depth++; cur += c; i++; continue; }
+    if (c === ")") { depth--; cur += c; i++; continue; }
+    if (depth === 0) {
+      const rest = s.slice(i);
+      const m = separatorRe.exec(rest);
+      if (m && m.index === 0) {
+        parts.push(cur.trim());
+        cur = "";
+        i += m[0].length;
+        continue;
+      }
+    }
+    cur += c;
+    i++;
+  }
+  if (cur.trim() !== "" || parts.length > 0) parts.push(cur.trim());
+  return parts;
+}
+
+function stripComments(s) {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'" || c === '"' || c === "\`") {
+      const end = skipQuoted(s, i);
+      out += s.slice(i, end + 1);
+      i = end + 1;
+      continue;
+    }
+    if (c === "-" && s[i + 1] === "-") {
+      const nl = s.indexOf("\n", i);
+      i = nl === -1 ? s.length : nl;
+      continue;
+    }
+    if (c === "/" && s[i + 1] === "*") {
+      const endIdx = s.indexOf("*/", i + 2);
+      i = endIdx === -1 ? s.length : endIdx + 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+function unquoteIdentifier(name) {
+  let t = name.trim();
+  if (t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1).replace(/""/g, '"');
+  if (t.startsWith("\`") && t.endsWith("\`")) return t.slice(1, -1).replace(/``/g, "\`");
+  if (t.startsWith("[") && t.endsWith("]")) return t.slice(1, -1);
+  return t;
+}
+
+function findTopLevelKeyword(s, keyword) {
+  const re = new RegExp("\\b" + keyword + "\\b", "i");
+  let depth = 0;
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'" || c === '"' || c === "\`") { i = skipQuoted(s, i) + 1; continue; }
+    if (c === "(") { depth++; i++; continue; }
+    if (c === ")") { depth--; i++; continue; }
+    if (depth === 0) {
+      const m = re.exec(s.slice(i));
+      if (m && m.index === 0) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+function findTopLevelEquals(s) {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "'" || c === '"' || c === "\`") { i = skipQuoted(s, i); continue; }
+    if (c === "(") { depth++; continue; }
+    if (c === ")") { depth--; continue; }
+    if (depth === 0 && c === "=") {
+      const prev = s[i - 1];
+      if (prev === "<" || prev === ">" || prev === "!" || prev === "=") continue;
+      return i;
+    }
+  }
+  return -1;
+}
+
+function parseInsert(sqlRaw) {
+  const sql = stripComments(sqlRaw).trim().replace(/;\s*$/, "");
+  const introM = /^insert\s+into\s+/i.exec(sql);
+  if (!introM) return null;
+
+  let rest = sql.slice(introM[0].length);
+  const parenIdx = rest.indexOf("(");
+  const valuesIdx = findTopLevelKeyword(rest, "values");
+  if (parenIdx === -1 || valuesIdx === -1 || parenIdx > valuesIdx) {
+    return { kind: "insert", error:
+      "Couldn't find a column list before VALUES. This tool needs " +
+      "INSERT INTO table (col1, col2, ...) VALUES (...), not the " +
+      "column-less form." };
+  }
+
+  const table = rest.slice(0, parenIdx).trim();
+  const colsClose = findMatchingParen(rest, parenIdx);
+  if (colsClose === -1) return { kind: "insert", error: "Unmatched parenthesis in the column list." };
+  const columns = splitTopLevel(rest.slice(parenIdx + 1, colsClose)).map(unquoteIdentifier);
+
+  let cursor = valuesIdx + "values".length;
+  const rows = [];
+  while (cursor < rest.length) {
+    while (cursor < rest.length && /[\s,]/.test(rest[cursor])) cursor++;
+    if (cursor >= rest.length) break;
+    if (rest[cursor] !== "(") break;
+    const close = findMatchingParen(rest, cursor);
+    if (close === -1) return { kind: "insert", error: "Unmatched parenthesis in a VALUES tuple." };
+    rows.push(splitTopLevel(rest.slice(cursor + 1, close)));
+    cursor = close + 1;
+  }
+
+  if (rows.length === 0) return { kind: "insert", error: "Found VALUES but no parenthesized value tuple after it." };
+  return { kind: "insert", table, columns, rows };
+}
+
+function parseUpdate(sqlRaw) {
+  const sql = stripComments(sqlRaw).trim().replace(/;\s*$/, "");
+  const introM = /^update\s+/i.exec(sql);
+  if (!introM) return null;
+  let rest = sql.slice(introM[0].length);
+
+  const setIdx = findTopLevelKeyword(rest, "set");
+  if (setIdx === -1) return { kind: "update", error: "Couldn't find a SET clause." };
+  const table = rest.slice(0, setIdx).trim();
+
+  let afterSet = rest.slice(setIdx + "set".length);
+  const whereIdx = findTopLevelKeyword(afterSet, "where");
+  const setClause = whereIdx === -1 ? afterSet : afterSet.slice(0, whereIdx);
+  const whereClause = whereIdx === -1 ? "" : afterSet.slice(whereIdx + "where".length);
+
+  const assignments = splitTopLevel(setClause).map((piece) => {
+    const eqIdx = findTopLevelEquals(piece);
+    if (eqIdx === -1) return [piece.trim(), ""];
+    return [unquoteIdentifier(piece.slice(0, eqIdx)), piece.slice(eqIdx + 1).trim()];
+  });
+
+  const whereConditions = whereClause.trim() ? splitTopLevel(whereClause, /^\s+and\s+/i) : [];
+  return { kind: "update", table, assignments, whereConditions };
+}
+
+function parseGenericParenList(sqlRaw) {
+  const sql = stripComments(sqlRaw).trim().replace(/;\s*$/, "");
+  const openIdx = sql.indexOf("(");
+  if (openIdx === -1) return null;
+  const close = findMatchingParen(sql, openIdx);
+  if (close === -1) return null;
+  const items = splitTopLevel(sql.slice(openIdx + 1, close));
+  if (items.length < 2) return null;
+  return { kind: "generic", prefix: sql.slice(0, openIdx).trim(), items };
+}
+
+function parseSql(sqlRaw) {
+  const trimmed = sqlRaw.trim();
+  if (!trimmed) return { kind: "empty" };
+  const insertResult = parseInsert(trimmed);
+  if (insertResult) return insertResult;
+  const updateResult = parseUpdate(trimmed);
+  if (updateResult) return updateResult;
+  const generic = parseGenericParenList(trimmed);
+  if (generic) return generic;
+  return { kind: "unrecognized" };
+}
+
+// =====================================================================
+// Rendering
+// =====================================================================
+
+const $input = document.getElementById("sqlInput");
+const $output = document.getElementById("output");
+const $badge = document.getElementById("badge");
+const $toast = document.getElementById("toast");
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Hand-rolled instead of String.prototype.padEnd for maximum compatibility
+// -- this only feeds the plain-text "Copy" output, so simplicity wins here.
+function padEnd(str, len) {
+  str = String(str);
+  while (str.length < len) str += " ";
+  return str;
+}
+
+function setBadge(text, kindClass) {
+  $badge.textContent = text;
+  $badge.className = "badge" + (kindClass ? " " + kindClass : "");
+}
+
+let lastPlainText = "";
+
+function render() {
+  const raw = $input.value;
+  const result = parseSql(raw);
+
+  if (result.kind === "empty") {
+    setBadge("no input yet");
+    $output.innerHTML = '<p class="empty-state">Paste a SQL statement on the left. ' +
+      'This works best on <code>INSERT INTO t (a, b, ...) VALUES (1, 2, ...)</code> ' +
+      'and <code>UPDATE t SET a = 1, b = 2 WHERE ...</code> -- the two shapes where a ' +
+      'long, flat list of items is easy to miscount.</p>';
+    lastPlainText = "";
+    return;
+  }
+
+  if (result.kind === "unrecognized") {
+    setBadge("not recognized", "kind-error");
+    $output.innerHTML = '<div class="warning">Didn\'t recognize this as INSERT, UPDATE, ' +
+      'or a statement with a plain parenthesized list. Double check it\'s a complete ' +
+      'statement (including the opening keyword).</div>';
+    lastPlainText = "";
+    return;
+  }
+
+  if (result.error) {
+    setBadge(result.kind.toUpperCase() + " -- issue", "kind-error");
+    $output.innerHTML = '<div class="warning">' + escapeHtml(result.error) + '</div>';
+    lastPlainText = "";
+    return;
+  }
+
+  if (result.kind === "insert") return renderInsert(result);
+  if (result.kind === "update") return renderUpdate(result);
+  if (result.kind === "generic") return renderGeneric(result);
+}
+
+function renderInsert(r) {
+  const rowCount = r.rows.length;
+  setBadge(
+    "INSERT \u00b7 " + r.columns.length + " field" + (r.columns.length === 1 ? "" : "s") +
+    (rowCount > 1 ? " \u00b7 " + rowCount + " rows" : ""),
+    "kind-insert"
+  );
+
+  let html = "";
+  const mismatches = r.rows
+    .map((row, i) => ({ i, diff: row.length - r.columns.length }))
+    .filter((m) => m.diff !== 0);
+
+  if (mismatches.length > 0) {
+    const parts = mismatches.map((m) =>
+      "row " + (m.i + 1) + " has " + (m.diff > 0 ? m.diff + " more value" + (Math.abs(m.diff) === 1 ? "" : "s") : Math.abs(m.diff) + " fewer value" + (Math.abs(m.diff) === 1 ? "" : "s")) + " than fields"
+    );
+    html += '<div class="warning">Column/value count mismatch: ' + escapeHtml(parts.join("; ")) +
+      '. Mismatched rows are marked below -- double check them, this usually means a value ' +
+      'itself contains an unescaped comma or the statement got cut off.</div>';
+  }
+
+  const plainLines = [];
+  plainLines.push("Table: " + r.table);
+  plainLines.push("");
+
+  html += '<div class="scrollwrap"><table class="pairs"><thead><tr>';
+  html += '<th class="idx">#</th><th>field</th>';
+  for (let ri = 0; ri < rowCount; ri++) {
+    html += "<th>" + (rowCount > 1 ? "row " + (ri + 1) : "value") + "</th>";
+  }
+  html += "</tr></thead><tbody>";
+
+  const width = Math.max(...r.columns.map((c) => c.length));
+
+  for (let ci = 0; ci < r.columns.length; ci++) {
+    const col = r.columns[ci];
+    const rowHasMismatch = r.rows.some((row) => row.length !== r.columns.length);
+    html += "<tr" + (rowHasMismatch ? "" : "") + ">";
+    html += '<td class="idx">' + (ci + 1) + "</td>";
+    html += '<td class="fieldname">' + escapeHtml(col) + "</td>";
+
+    const lineParts = [padEnd(col, width) + "  ="];
+    for (let ri = 0; ri < rowCount; ri++) {
+      const row = r.rows[ri];
+      const isMissing = ci >= row.length;
+      const cellClass = isMissing ? "valuecell missing" : "valuecell" + (row.length !== r.columns.length ? " mismatch" : "");
+      const val = isMissing ? "(missing)" : row[ci];
+      html += '<td class="' + cellClass + '">' + escapeHtml(isMissing ? "(missing)" : val) + "</td>";
+      if (ri === 0) lineParts.push(isMissing ? "(missing)" : val);
+    }
+    html += "</tr>";
+    plainLines.push(lineParts.join(" "));
+  }
+  html += "</tbody></table></div>";
+
+  $output.innerHTML = html;
+  lastPlainText = plainLines.join("\n");
+}
+
+function renderUpdate(r) {
+  setBadge("UPDATE \u00b7 " + r.assignments.length + " field" + (r.assignments.length === 1 ? "" : "s"), "kind-update");
+
+  const plainLines = ["Table: " + r.table, ""];
+  const width = Math.max(...r.assignments.map(([c]) => c.length), 0);
+
+  let html = '<div class="section-label">SET</div>';
+  html += '<table class="pairs"><tbody>';
+  r.assignments.forEach(([col, val], i) => {
+    html += "<tr><td class=\"idx\">" + (i + 1) + "</td><td class=\"fieldname\">" +
+      escapeHtml(col) + "</td><td class=\"valuecell\">" + escapeHtml(val) + "</td></tr>";
+    plainLines.push(padEnd(col, width) + "  = " + val);
+  });
+  html += "</tbody></table>";
+
+  if (r.whereConditions.length > 0) {
+    html += '<div class="section-label">WHERE (' + r.whereConditions.length + " condition" + (r.whereConditions.length === 1 ? "" : "s") + ", joined by AND)</div>";
+    html += '<ol class="plist">';
+    plainLines.push("", "WHERE:");
+    r.whereConditions.forEach((cond, i) => {
+      html += '<li><span class="idx">' + (i + 1) + '.</span><span class="cond">' + escapeHtml(cond) + "</span></li>";
+      plainLines.push("  " + (i + 1) + ". " + cond);
+    });
+    html += "</ol>";
+  }
+
+  $output.innerHTML = html;
+  lastPlainText = plainLines.join("\n");
+}
+
+function renderGeneric(r) {
+  setBadge((r.prefix ? r.prefix.split(/\s+/)[0].toUpperCase() + " \u00b7 " : "") + r.items.length + " items");
+  let html = "";
+  if (r.prefix) html += '<div class="section-label">' + escapeHtml(r.prefix) + "</div>";
+  html += '<ol class="plist">';
+  const plainLines = [];
+  r.items.forEach((item, i) => {
+    html += '<li><span class="idx">' + (i + 1) + '.</span><span class="cond">' + escapeHtml(item) + "</span></li>";
+    plainLines.push((i + 1) + ". " + item);
+  });
+  html += "</ol>";
+  $output.innerHTML = html;
+  lastPlainText = plainLines.join("\n");
+}
+
+// =====================================================================
+// Wiring
+// =====================================================================
+
+let debounceHandle = null;
+$input.addEventListener("input", () => {
+  clearTimeout(debounceHandle);
+  debounceHandle = setTimeout(render, 120);
+});
+
+document.getElementById("clearBtn").addEventListener("click", () => {
+  $input.value = "";
+  render();
+  $input.focus();
+});
+
+const EXAMPLE = `INSERT INTO customer_orders (
+  order_id, customer_id, customer_name, email, shipping_address,
+  billing_address, product_sku, quantity, unit_price, discount_pct,
+  tax_amount, shipping_cost, total_amount, currency, payment_method,
+  order_status, fulfillment_center, tracking_number, notes, created_at
+) VALUES (
+  48291, 10456, 'Priya Natarajan', 'priya.n@example.com', '221 Birch Ave, Unit 4',
+  '221 Birch Ave, Unit 4', 'SKU-88213-M', 2, 24.99, 10,
+  3.60, 5.00, 49.58, 'USD', 'credit_card',
+  'processing', 'FC-EAST-3', NULL, 'Leave at front desk', NOW()
+);`;
+
+document.getElementById("exampleBtn").addEventListener("click", () => {
+  $input.value = EXAMPLE;
+  render();
+});
+
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  if (!lastPlainText) {
+    showToast("Nothing to copy yet");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(lastPlainText);
+    showToast("Copied");
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = lastPlainText;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); showToast("Copied"); }
+    catch (e2) { showToast("Copy failed -- select the text manually"); }
+    document.body.removeChild(ta);
+  }
+});
+
+let toastTimer = null;
+function showToast(msg) {
+  $toast.textContent = msg;
+  $toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $toast.classList.remove("show"), 1600);
+}
+
+render();
+</script>
+</body>
+</html>

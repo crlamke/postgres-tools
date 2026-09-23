@@ -16,6 +16,18 @@ different toolkit:
   - A history panel that records every command you run (with timestamp and
     success/failure), persisted to ~/.pg_gui_history.json so it survives
     between runs. Double-click any entry to load it back into the input box.
+  - A "Load…" button next to the connection fields reads host/port/
+    database/user/password from a plain text file (key=value per line,
+    e.g. host=localhost) -- keep one file per database and load whichever
+    one you need to switch connections quickly, instead of retyping
+    everything. Loading is logged to the Activity panel like everything
+    else.
+  - A status/activity panel at the bottom, newest entry first, showing
+    connection changes plus every command run and its result. Everything
+    shown there is also written to a per-session log file in this script's
+    own directory, named with the timestamp the app was started (e.g.
+    pg_gui_activity_20260101_120000.log). When the app exits -- normally,
+    via a signal, or due to a crash -- a final line records which.
 
 Dependencies:
     pip install PyQt5 psycopg2-binary
@@ -25,12 +37,14 @@ Run:
 """
 import json
 import os
+import signal
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QObject, pyqtSignal
+from PyQt5.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication,
@@ -43,8 +57,10 @@ from PyQt5.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QListWidget,
+    QListWidgetItem,
     QSplitter,
     QMessageBox,
+    QFileDialog,
     QHBoxLayout,
     QVBoxLayout,
     QFormLayout,
@@ -59,6 +75,10 @@ except ImportError:  # pragma: no cover - reported to the user at startup
 
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".pg_gui_history.json")
 MAX_HISTORY_ENTRIES = 200
+
+# The directory this script itself lives in -- where the per-session
+# activity log file gets created.
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +129,53 @@ class HistoryStore:
     def clear(self):
         self.entries = []
         self._save()
+
+
+# ---------------------------------------------------------------------------
+# Activity logger: feeds the bottom Activity panel and a per-session log
+# file in the script's own directory, named with the timestamp the app was
+# started. Kept deliberately simple and crash-safe -- every write is
+# flushed immediately, and a failure to open/write the file never raises
+# (the app just keeps running with on-screen-only activity).
+# ---------------------------------------------------------------------------
+class ActivityLogger:
+    def __init__(self, app_dir):
+        self.start_time = datetime.now()
+        filename = f"pg_gui_activity_{self.start_time:%Y%m%d_%H%M%S}.log"
+        self.path = os.path.join(app_dir, filename)
+        self.error = None
+        try:
+            # buffering=1 -> line-buffered, so each entry hits disk right
+            # away rather than sitting in an in-process buffer that a
+            # crash could lose.
+            self.file = open(self.path, "a", encoding="utf-8", buffering=1)
+            self.file.write(
+                f"=== pg_gui activity log started {self.start_time.isoformat(timespec='seconds')} ===\n"
+            )
+            self.file.flush()
+        except OSError as exc:
+            self.file = None
+            self.error = str(exc)
+
+    def write(self, message):
+        """Writes one timestamped line to the log file (if open) and
+        returns that line's text for display elsewhere (e.g. the panel)."""
+        line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        if self.file is not None:
+            try:
+                self.file.write(line + "\n")
+                self.file.flush()
+            except OSError:
+                pass
+        return line
+
+    def shutdown(self):
+        if self.file is not None:
+            try:
+                self.file.close()
+            except OSError:
+                pass
+            self.file = None
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +240,73 @@ class PgConnection:
                 rowcount = cur.rowcount
         elapsed = time.monotonic() - start
         return columns, rows, rowcount, elapsed
+
+
+# ---------------------------------------------------------------------------
+# Connection profile files: plain text, one "key=value" per line, so you
+# can keep a separate file per database and load it into the Connection
+# fields instead of retyping host/port/database/user/password every time.
+#
+#   # example: staging.conf
+#   host=db.staging.internal
+#   port=5432
+#   database=myapp
+#   user=myapp_ro
+#   password=hunter2
+#
+# Lines starting with '#' or ';' are comments; blank lines are ignored.
+# Keys are case-insensitive; a few common aliases are accepted (dbname for
+# database, username for user, hostname for host, pass for password).
+# Unrecognized keys or unparseable lines are collected as warnings rather
+# than treated as fatal, so a typo doesn't block loading the rest of the
+# file.
+# ---------------------------------------------------------------------------
+_CONNECTION_FIELD_ALIASES = {
+    "host": "host",
+    "hostname": "host",
+    "port": "port",
+    "database": "database",
+    "dbname": "database",
+    "db": "database",
+    "user": "user",
+    "username": "user",
+    "password": "password",
+    "pass": "password",
+}
+
+_CONNECTION_FIELDS = ("host", "port", "database", "user", "password")
+
+
+def parse_connection_file(path):
+    """Reads a connection profile file. Returns (values, warnings) where
+    values is a dict with a subset of _CONNECTION_FIELDS as keys (only the
+    fields actually present in the file), and warnings is a list of
+    human-readable strings about anything skipped or not understood.
+    Raises OSError/UnicodeDecodeError if the file itself can't be read --
+    that's treated as fatal by the caller, unlike a single bad line.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    values = {}
+    warnings = []
+    for lineno, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if "=" not in line:
+            warnings.append(f"line {lineno}: no '=' found, skipped: {raw_line.strip()!r}")
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        value = value.strip()
+        field = _CONNECTION_FIELD_ALIASES.get(key)
+        if field is None:
+            warnings.append(f"line {lineno}: unrecognized key {key!r}, ignored")
+            continue
+        values[field] = value
+
+    return values, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +555,13 @@ STATUS_COLORS = {
 # GUI
 # ---------------------------------------------------------------------------
 class PgGuiApp(QWidget):
+    ACTIVITY_COLORS = {
+        "ok": QColor("#1a7f37"),
+        "error": QColor("#b00020"),
+        "connect": QColor("#0a58ca"),
+        "info": None,  # leave at the widget's default palette color
+    }
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Postgres Query Tool (Qt)")
@@ -428,6 +569,8 @@ class PgGuiApp(QWidget):
 
         self.pg = PgConnection()
         self.history = HistoryStore()
+        self.activity_log = ActivityLogger(APP_DIR)
+        self._exit_logged = False
 
         self.worker = Worker(self.pg)
         self.worker.connect_ok.connect(self._on_connect_ok)
@@ -438,6 +581,15 @@ class PgGuiApp(QWidget):
         self._build_layout()
         self._refresh_history_list()
         self._set_status("disconnected", "Not connected")
+
+        if self.activity_log.error:
+            self.activity_log_label.setText(
+                f"Activity log could not be opened ({self.activity_log.error}) -- "
+                "this session's activity will not be saved to disk."
+            )
+            self._log_activity("Could not open activity log file -- continuing without file logging.", kind="error")
+        else:
+            self._log_activity(f"Application started. Logging to {self.activity_log.path}", kind="info")
 
     # -- Layout -------------------------------------------------------
     def _build_layout(self):
@@ -451,11 +603,67 @@ class PgGuiApp(QWidget):
         splitter.setStretchFactor(1, 1)
         root.addWidget(splitter, stretch=1)
 
+        root.addWidget(self._build_activity_group())
+
+    def _build_activity_group(self):
+        group = QGroupBox("Activity")
+        layout = QVBoxLayout(group)
+
+        header = QHBoxLayout()
+        self.activity_log_label = QLabel(f"Logging to: {self.activity_log.path}")
+        self.activity_log_label.setStyleSheet("color: #666666;")
+        header.addWidget(self.activity_log_label)
+        header.addStretch(1)
+        clear_view_btn = QPushButton("Clear view")
+        clear_view_btn.setToolTip("Clears this panel only -- the log file on disk is not affected.")
+        clear_view_btn.clicked.connect(lambda: self.activity_list.clear())
+        header.addWidget(clear_view_btn)
+        layout.addLayout(header)
+
+        self.activity_list = QListWidget()
+        self.activity_list.setMaximumHeight(160)
+        layout.addWidget(self.activity_list)
+
+        return group
+
+    # -- Activity logging ---------------------------------------------
+    @staticmethod
+    def _one_line(text, maxlen=140):
+        text = " ".join(str(text).split())
+        if len(text) > maxlen:
+            text = text[: maxlen - 1].rstrip() + "\u2026"
+        return text
+
+    def _log_activity(self, message, kind="info"):
+        """Writes to the activity log file and inserts the same line at the
+        top of the on-screen Activity panel (newest entry first)."""
+        line = self.activity_log.write(message)
+        item = QListWidgetItem(line)
+        color = self.ACTIVITY_COLORS.get(kind)
+        if color is not None:
+            item.setForeground(color)
+        self.activity_list.insertItem(0, item)
+        # Keep the panel itself bounded -- the full history lives in the
+        # log file regardless, so trimming the widget is just tidiness.
+        MAX_PANEL_ITEMS = 500
+        while self.activity_list.count() > MAX_PANEL_ITEMS:
+            self.activity_list.takeItem(self.activity_list.count() - 1)
+
     def _build_connection_group(self):
         group = QGroupBox("Connection")
         outer = QVBoxLayout(group)
 
         fields_row = QHBoxLayout()
+
+        load_btn = QPushButton("Load\u2026")
+        load_btn.setToolTip(
+            "Load host/port/database/user/password from a text file "
+            "(key=value per line, e.g. host=localhost). Keep one file per "
+            "database to switch between connections quickly."
+        )
+        load_btn.clicked.connect(self._on_load_connection_file_clicked)
+        fields_row.addWidget(load_btn)
+
         self.host_edit = QLineEdit("localhost")
         self.port_edit = QLineEdit("5432")
         self.port_edit.setFixedWidth(60)
@@ -489,6 +697,46 @@ class PgGuiApp(QWidget):
         outer.addLayout(status_row)
 
         return group
+
+    def _on_load_connection_file_clicked(self):
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Load connection file",
+            "",
+            "Connection files (*.conf *.cfg *.env *.txt);;All files (*)",
+        )
+        if not path:
+            return  # user cancelled
+
+        try:
+            values, warnings = parse_connection_file(path)
+        except (OSError, UnicodeDecodeError) as exc:
+            self._log_activity(f"Failed to load connection file {path}: {self._one_line(exc)}", kind="error")
+            QMessageBox.critical(self, "Could not load file", f"Could not read {path}:\n{exc}")
+            return
+
+        # Full overwrite: whatever the file doesn't specify is cleared,
+        # rather than left over from whichever profile was loaded before --
+        # that's what makes switching between profiles predictable instead
+        # of accidentally carrying a stale password from a previous file.
+        self.host_edit.setText(values.get("host", ""))
+        self.port_edit.setText(values.get("port", ""))
+        self.db_edit.setText(values.get("database", ""))
+        self.user_edit.setText(values.get("user", ""))
+        self.password_edit.setText(values.get("password", ""))
+
+        loaded_fields = ", ".join(f for f in _CONNECTION_FIELDS if f in values)
+        self._log_activity(
+            f"Loaded connection info from {path} ({loaded_fields or 'no recognized fields'})", kind="info"
+        )
+        if warnings:
+            for w in warnings:
+                self._log_activity(f"  {path}: {w}", kind="info")
+            QMessageBox.warning(
+                self,
+                "Loaded with warnings",
+                f"Loaded {path}, but some lines were skipped:\n\n" + "\n".join(warnings),
+            )
 
     def _build_query_widget(self):
         container = QWidget()
@@ -558,7 +806,12 @@ class PgGuiApp(QWidget):
     # -- Connection handling ---------------------------------------------
     def _on_connect_clicked(self):
         if self.pg.is_connected:
+            info = self.pg.info
             self.pg.disconnect()
+            self._log_activity(
+                f"Disconnected from {info.get('user')}@{info.get('host')}:{info.get('port')}/{info.get('dbname')}",
+                kind="connect",
+            )
             self._set_status("disconnected", "Not connected")
             self.connect_btn.setText("Connect")
             return
@@ -574,6 +827,7 @@ class PgGuiApp(QWidget):
             return
 
         self._set_status("connecting", "Connecting ...")
+        self._log_activity(f"Connecting to {user}@{host}:{port}/{dbname} ...", kind="info")
         self.connect_btn.setEnabled(False)
         self.worker.do_connect(host, port, dbname, user, password)
 
@@ -583,12 +837,16 @@ class PgGuiApp(QWidget):
             "connected",
             f"Connected to {info['user']}@{info['host']}:{info['port']}/{info['dbname']}",
         )
+        self._log_activity(
+            f"Connected to {info['user']}@{info['host']}:{info['port']}/{info['dbname']}", kind="connect"
+        )
         self.connect_btn.setText("Disconnect")
         self.connect_btn.setEnabled(True)
 
     def _on_connect_err(self, message):
         self._set_status("disconnected", "Not connected")
         self.connect_btn.setEnabled(True)
+        self._log_activity(f"Connection failed: {self._one_line(message)}", kind="error")
         QMessageBox.critical(self, "Connection failed", message)
 
     # -- Query handling ---------------------------------------------
@@ -607,12 +865,18 @@ class PgGuiApp(QWidget):
                 QMessageBox.critical(self, "Unknown command", str(exc))
                 self.history.add(raw, status="error", error=str(exc))
                 self._refresh_history_list()
+                self._log_activity(
+                    f"Command: {self._one_line(raw)}  ->  ERROR: {self._one_line(exc)}", kind="error"
+                )
                 return
             if help_rows is not None:
                 self._render_results(["Command", "Description"], help_rows)
                 self.query_status_label.setText(f"{len(help_rows)} command(s)")
                 self.history.add(raw, status="ok", rowcount=len(help_rows))
                 self._refresh_history_list()
+                self._log_activity(
+                    f"Command: {self._one_line(raw)}  ->  showed {len(help_rows)} help entries", kind="ok"
+                )
                 return
         else:
             exec_sql, params = raw, None
@@ -630,11 +894,13 @@ class PgGuiApp(QWidget):
         self.query_status_label.setText(msg)
         self.history.add(sql, status="ok", rowcount=rowcount, elapsed=round(elapsed, 3))
         self._refresh_history_list()
+        self._log_activity(f"Query: {self._one_line(sql)}  ->  {msg}", kind="ok")
         self.run_btn.setEnabled(True)
 
     def _on_query_err(self, sql, message):
         self._render_results([], [])
         self.query_status_label.setText("Error")
+        self._log_activity(f"Query: {self._one_line(sql)}  ->  ERROR: {self._one_line(message)}", kind="error")
         QMessageBox.critical(self, "Query failed", message)
         self.history.add(sql, status="error", error=message)
         self._refresh_history_list()
@@ -675,6 +941,63 @@ class PgGuiApp(QWidget):
         if reply == QMessageBox.Yes:
             self.history.clear()
             self._refresh_history_list()
+            self._log_activity("Cleared query history.", kind="info")
+
+
+def _install_exit_handling(app, window):
+    """Wires up logging for every way this app can end: a normal quit, a
+    terminating signal (Ctrl-C / SIGTERM), or an unhandled exception. Each
+    path is guarded by window._exit_logged so only the first one to fire
+    writes the "exiting" line -- whichever happens first is the real
+    reason, and later cleanup shouldn't overwrite it with "normally"."""
+
+    def on_about_to_quit():
+        if not window._exit_logged:
+            window._exit_logged = True
+            window._log_activity("Application exiting normally.", kind="info")
+        window.activity_log.shutdown()
+
+    app.aboutToQuit.connect(on_about_to_quit)
+
+    def excepthook(exc_type, exc_value, exc_tb):
+        if not window._exit_logged:
+            window._exit_logged = True
+            window._log_activity(
+                f"Application exiting due to an unhandled exception: "
+                f"{exc_type.__name__}: {window._one_line(exc_value)}",
+                kind="error",
+            )
+            # Full traceback goes to the log file only -- too long to be
+            # useful in the on-screen panel.
+            window.activity_log.write(
+                "Traceback:\n" + "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            )
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = excepthook
+
+    def on_signal(signum, _frame):
+        try:
+            name = signal.Signals(signum).name
+        except ValueError:
+            name = str(signum)
+        if not window._exit_logged:
+            window._exit_logged = True
+            window._log_activity(f"Application terminated by signal {name}.", kind="error")
+        window.activity_log.shutdown()
+        app.quit()
+
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+
+    # The Qt event loop blocks in C++ and won't let Python's signal
+    # handlers run until something wakes the interpreter up -- this timer
+    # is the standard no-op wake-up tick that makes Ctrl-C/SIGTERM work
+    # promptly instead of only after the next UI event.
+    wake_timer = QTimer()
+    wake_timer.timeout.connect(lambda: None)
+    wake_timer.start(250)
+    return wake_timer  # caller must keep a reference so it isn't collected
 
 
 def main():
@@ -682,6 +1005,7 @@ def main():
         print("psycopg2 is not installed. Run: pip install psycopg2-binary")
     app = QApplication(sys.argv)
     window = PgGuiApp()
+    _wake_timer = _install_exit_handling(app, window)  # noqa: F841 -- keep alive
     window.show()
     sys.exit(app.exec_())
 

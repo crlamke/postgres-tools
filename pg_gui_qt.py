@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 r"""
-pg_gui_qt.py - A simple desktop GUI for PostgreSQL, built with PyQt5.
+pg_gui_qt.py - A PyQt based GUI tool for PostgreSQL.
 
-This is a Qt port of pg_gui.py (the Tkinter version) -- same feature set,
-different toolkit:
-
-  - Connection panel (host/port/database/user/password) with a live
+Features include:
+  - Connection panel (host/port/database/user/password) with a
     connected/disconnected status indicator.
   - A SQL input box and a "Run" button (or Ctrl+Enter); results render in a
     table for SELECT-style queries, or a row-count message for
@@ -16,7 +14,7 @@ different toolkit:
   - A history panel that records every command you run (with timestamp and
     success/failure), persisted to ~/.pg_gui_history.json so it survives
     between runs. Double-click any entry to load it back into the input box.
-  - A "Load…" button next to the connection fields reads host/port/
+  - A "Load Config…" button next to the connection fields reads host/port/
     database/user/password from a plain text file (key=value per line,
     e.g. host=localhost) -- keep one file per database and load whichever
     one you need to switch connections quickly, instead of retyping
@@ -655,7 +653,7 @@ class PgGuiApp(QWidget):
 
         fields_row = QHBoxLayout()
 
-        load_btn = QPushButton("Load\u2026")
+        load_btn = QPushButton("Load Config\u2026")
         load_btn.setToolTip(
             "Load host/port/database/user/password from a text file "
             "(key=value per line, e.g. host=localhost). Keep one file per "
@@ -780,6 +778,7 @@ class PgGuiApp(QWidget):
         self.result_table = QTableWidget()
         self.result_table.setEditTriggers(QTableWidget.NoEditTriggers)
         results_layout.addWidget(self.result_table)
+        self.result_table.setFixedHeight(160)
         layout.addWidget(results_group, stretch=1)
 
         return container

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>psql Cheat Sheet</title><style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--muted:#5b6370;--accent:#336791;--code-bg:#f0eee8;--border:#ddd8cc;--th:#e8eef4}
+@media (prefers-color-scheme:dark){:root{--bg:#16181c;--fg:#e6e6e6;--muted:#9aa3ad;--accent:#7fb2dc;--code-bg:#23262c;--border:#353a42;--th:#1f2a35}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:2rem;margin:0 0 4px;color:var(--accent)}
+.meta{color:var(--muted);margin:0 0 20px}
+nav{display:flex;flex-wrap:wrap;gap:6px 14px;padding:10px 0 18px;border-bottom:1px solid var(--border);margin-bottom:8px}
+nav a{color:var(--accent);text-decoration:none;font-size:.92rem}
+nav a:hover{text-decoration:underline}
+h2{font-size:1.3rem;margin:36px 0 10px;padding-bottom:4px;border-bottom:2px solid var(--accent)}
+code{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code-bg);padding:1px 5px;border-radius:4px;white-space:nowrap}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:6px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0;white-space:pre}
+table{border-collapse:collapse;width:100%;margin:10px 0 16px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--border);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--th)}
+td:first-child{white-space:nowrap}
+ul{padding-left:22px} li p{margin:4px 0}
+@media print{body{background:#fff;color:#000;font-size:11px}nav{display:none}h2{break-after:avoid}table,pre{break-inside:avoid}main{max-width:none;padding:0}}
+</style></head><body><main>
+<h1 id="psql-cheat-sheet">psql Cheat Sheet</h1>
+<p class="meta">Quick reference for occasional PostgreSQL / psql users</p>
+<nav><a href="#connecting">Connecting</a><a href="#survival-basics">Survival basics</a><a href="#exploring-a-database">Exploring a database</a><a href="#everyday-queries">Everyday queries</a><a href="#output-formatting">Output formatting</a><a href="#import-export-and-scripts">Import, export and scripts</a><a href="#transactions-and-safety">Transactions and safety</a><a href="#gotchas-for-mysql-and-other-db-users">Gotchas for MySQL and other DB users</a></nav>
+<h2 id="connecting">Connecting</h2>
+<p>The usual form is <code>psql -h HOST -p PORT -U USER -d DATABASE</code>; any flag you leave out falls back to an environment variable, then a default.</p>
+<table><thead><tr><th>Flag</th><th>Meaning</th><th>Default if omitted</th></tr></thead><tbody><tr><td><code>-h host</code></td><td>Server hostname or IP</td><td>Local Unix socket</td></tr><tr><td><code>-p 5432</code></td><td>Port</td><td>5432</td></tr><tr><td><code>-U user</code></td><td>Database role (user)</td><td>Your OS username</td></tr><tr><td><code>-d dbname</code></td><td>Database to open</td><td>Same as the user name</td></tr><tr><td><code>-W</code></td><td>Force a password prompt</td><td>Prompts only if the server asks</td></tr><tr><td><code>-c &quot;SQL&quot;</code></td><td>Run one command and exit</td><td>—</td></tr><tr><td><code>-f file.sql</code></td><td>Run a script file and exit</td><td>—</td></tr></tbody></table>
+<p>Connection string (URI) form, handy for copy-paste:</p>
+<pre><code class="language-bash">psql &quot;postgresql://user:password@host:5432/dbname?sslmode=require&quot;</code></pre>
+<p>Environment variables let you skip the flags: <code>PGHOST</code>, <code>PGPORT</code>, <code>PGUSER</code>, <code>PGDATABASE</code>, <code>PGPASSWORD</code> (avoid in shared shells).</p>
+<p>To avoid typing passwords, add a line to <code>~/.pgpass</code> (Windows: <code>%APPDATA%\postgresql\pgpass.conf</code>) and run <code>chmod 600 ~/.pgpass</code>:</p>
+<pre><code class="language-text">host:port:database:user:password</code></pre>
+<p>Already inside psql? Switch with <code>\c dbname</code> or <code>\c dbname user host port</code>. <code>\conninfo</code> shows where you are connected.</p>
+<h2 id="survival-basics">Survival basics</h2>
+<p>psql takes two kinds of input: SQL statements, which run only when you type a semicolon, and backslash meta-commands, which run immediately with no semicolon.</p>
+<table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody><tr><td><code>\q</code> (or Ctrl+D)</td><td>Quit psql</td></tr><tr><td><code>\?</code></td><td>List all backslash commands</td></tr><tr><td><code>\h</code></td><td>List SQL commands; <code>\h CREATE TABLE</code> shows syntax for one</td></tr><tr><td><code>\r</code></td><td>Clear the query buffer (abandon a half-typed statement)</td></tr><tr><td>Ctrl+C</td><td>Cancel a running query or the current line</td></tr><tr><td><code>\e</code></td><td>Open the last query in your editor, run it on save</td></tr><tr><td><code>\g</code></td><td>Re-run the last query</td></tr><tr><td><code>\s</code></td><td>Show command history</td></tr><tr><td><code>\! cmd</code></td><td>Run a shell command, e.g. <code>\! clear</code></td></tr></tbody></table>
+<p>Read the prompt to see what psql is waiting for:</p>
+<table><thead><tr><th>Prompt</th><th>Meaning</th></tr></thead><tbody><tr><td><code>mydb=&gt;</code></td><td>Ready; you are a normal user</td></tr><tr><td><code>mydb=#</code></td><td>Ready; you are a superuser — be careful</td></tr><tr><td><code>mydb-&gt;</code></td><td>Statement not finished; you probably forgot the <code>;</code></td></tr><tr><td><code>mydb&#39;&gt;</code> or <code>mydb&quot;&gt;</code></td><td>Unclosed quote; type the closing quote</td></tr><tr><td><code>mydb(&gt;</code></td><td>Unclosed parenthesis</td></tr><tr><td><code>mydb=*&gt;</code></td><td>Inside an open transaction (PG 13+)</td></tr><tr><td><code>mydb=!&gt;</code></td><td>Transaction failed; run <code>ROLLBACK;</code></td></tr></tbody></table>
+<p>If a query prints a long result and leaves you at a <code>:</code> or <code>(END)</code> screen, you are in the pager: press <code>q</code> to get back.</p>
+<h2 id="exploring-a-database">Exploring a database</h2>
+<p>The <code>\d</code> family describes what exists; add <code>+</code> for more detail (sizes, comments) and a pattern to filter, e.g. <code>\dt sales.*</code> or <code>\dt *order*</code>.</p>
+<table><thead><tr><th>Command</th><th>Shows</th></tr></thead><tbody><tr><td><code>\l</code></td><td>All databases</td></tr><tr><td><code>\dn</code></td><td>Schemas in the current database</td></tr><tr><td><code>\dt</code></td><td>Tables (in schemas on your search path)</td></tr><tr><td><code>\dt *.*</code></td><td>Tables in every schema, including system ones</td></tr><tr><td><code>\d tablename</code></td><td>Columns, types, indexes, constraints, triggers of one table</td></tr><tr><td><code>\d+ tablename</code></td><td>Same plus storage, size, and column comments</td></tr><tr><td><code>\dv</code> / <code>\dm</code></td><td>Views / materialized views</td></tr><tr><td><code>\di</code></td><td>Indexes</td></tr><tr><td><code>\ds</code></td><td>Sequences</td></tr><tr><td><code>\df</code></td><td>Functions; <code>\df+ name</code> shows source</td></tr><tr><td><code>\du</code></td><td>Roles (users) and their attributes</td></tr><tr><td><code>\dp tablename</code></td><td>Access privileges (who can SELECT, INSERT, …)</td></tr><tr><td><code>\dx</code></td><td>Installed extensions</td></tr><tr><td><code>\sf funcname</code></td><td>Print a function&#39;s definition</td></tr><tr><td><code>\sv viewname</code></td><td>Print a view&#39;s definition</td></tr></tbody></table>
+<p>Useful context checks:</p>
+<pre><code class="language-sql">SELECT current_database(), current_user, version();
+SHOW search_path;   -- which schemas unqualified names resolve to</code></pre>
+<p>If <code>\dt</code> shows &quot;Did not find any relations&quot;, the tables are probably in a schema not on your search path: try <code>\dt *.*</code> or <code>\dn</code>, then <code>SET search_path TO myschema, public;</code>.</p>
+<h2 id="everyday-queries">Everyday queries</h2>
+<p>These cover most quick look-ups; always add <code>LIMIT</code> when peeking at an unfamiliar table.</p>
+<pre><code class="language-sql">-- Peek at data
+SELECT * FROM orders LIMIT 10;
+SELECT count(*) FROM orders;
+SELECT * FROM orders ORDER BY created_at DESC LIMIT 5;
+
+-- Filter, group, distinct
+SELECT status, count(*) FROM orders GROUP BY status ORDER BY 2 DESC;
+SELECT DISTINCT country FROM customers;
+SELECT * FROM customers WHERE email ILIKE &#39;%@example.com&#39;;  -- case-insensitive
+
+-- Dates
+SELECT * FROM orders WHERE created_at &gt;= now() - interval &#39;7 days&#39;;
+SELECT date_trunc(&#39;day&#39;, created_at) AS day, count(*) FROM orders GROUP BY 1 ORDER BY 1;
+
+-- Find a column anywhere
+SELECT table_schema, table_name, column_name
+FROM information_schema.columns
+WHERE column_name ILIKE &#39;%email%&#39;;
+
+-- Table sizes, largest first
+SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS size
+FROM pg_catalog.pg_statio_user_tables
+ORDER BY pg_total_relation_size(relid) DESC LIMIT 10;
+
+-- Database size
+SELECT pg_size_pretty(pg_database_size(current_database()));
+
+-- What is running right now
+SELECT pid, usename, state, now() - query_start AS runtime, left(query, 80)
+FROM pg_stat_activity WHERE state &lt;&gt; &#39;idle&#39; ORDER BY runtime DESC;
+
+-- Stop a runaway query (cancel first; terminate kills the connection)
+SELECT pg_cancel_backend(12345);
+SELECT pg_terminate_backend(12345);
+
+-- Explain a slow query
+EXPLAIN ANALYZE SELECT ...;   -- note: ANALYZE really runs it</code></pre>
+<h2 id="output-formatting">Output formatting</h2>
+<p><code>\x auto</code> fixes the most common annoyance — wide rows wrapping into an unreadable mess — by switching to one-column-per-line display when a row won&#39;t fit.</p>
+<table><thead><tr><th>Command</th><th>Effect</th></tr></thead><tbody><tr><td><code>\x</code></td><td>Toggle expanded (vertical) display</td></tr><tr><td><code>\x auto</code></td><td>Expanded only when rows are too wide</td></tr><tr><td><code>\timing</code></td><td>Show how long each query took</td></tr><tr><td><code>\pset null &#39;∅&#39;</code></td><td>Show NULLs visibly instead of as blank</td></tr><tr><td><code>\pset pager off</code></td><td>Never use the pager (<code>on</code> / <code>always</code> also valid)</td></tr><tr><td><code>\pset format csv</code></td><td>Print CSV (PG 12+); also <code>aligned</code>, <code>unaligned</code>, <code>html</code>, <code>wrapped</code></td></tr><tr><td><code>\a</code></td><td>Toggle aligned / unaligned output</td></tr><tr><td><code>\t</code></td><td>Toggle headers and row count (tuples only)</td></tr><tr><td><code>\pset border 2</code></td><td>Draw full table borders</td></tr><tr><td><code>\watch 5</code></td><td>Re-run the last query every 5 seconds (Ctrl+C to stop)</td></tr></tbody></table>
+<p>To make settings stick, put them in <code>~/.psqlrc</code>:</p>
+<pre><code class="language-text">\set QUIET 1
+\x auto
+\timing on
+\pset null &#39;∅&#39;
+\set HISTCONTROL ignoredups
+\set ON_ERROR_ROLLBACK interactive
+\unset QUIET</code></pre>
+<p>From the shell, <code>psql -A -t -c &quot;SELECT ...&quot;</code> prints bare values with no headers or padding, which is handy in scripts.</p>
+<h2 id="import-export-and-scripts">Import, export and scripts</h2>
+<p>Use <code>\copy</code> (with the backslash) rather than SQL <code>COPY</code>: <code>\copy</code> reads and writes files on your machine with your permissions, while <code>COPY</code> uses the server&#39;s filesystem and needs special privileges.</p>
+<pre><code class="language-text">-- Export a table or query to CSV with a header row
+\copy orders TO &#39;orders.csv&#39; WITH (FORMAT csv, HEADER)
+\copy (SELECT id, total FROM orders WHERE total &gt; 100) TO &#39;big_orders.csv&#39; CSV HEADER
+
+-- Import CSV into an existing table (columns must line up)
+\copy orders (id, customer_id, total) FROM &#39;orders.csv&#39; WITH (FORMAT csv, HEADER)</code></pre>
+<p><code>\copy</code> must fit on one line and takes no trailing semicolon.</p>
+<table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody><tr><td><code>\i file.sql</code></td><td>Run a SQL script from inside psql</td></tr><tr><td><code>\ir file.sql</code></td><td>Same, path relative to the current script</td></tr><tr><td><code>\o out.txt</code></td><td>Send all following output to a file; <code>\o</code> alone stops</td></tr><tr><td><code>\w file.sql</code></td><td>Save the current query buffer to a file</td></tr><tr><td><code>\gx</code></td><td>Run the query with expanded output, once</td></tr><tr><td><code>\g out.txt</code></td><td>Run the query and write just its result to a file</td></tr></tbody></table>
+<p>From the shell:</p>
+<pre><code class="language-bash">psql -d mydb -f script.sql                     # run a script
+psql -d mydb -v ON_ERROR_STOP=1 -f script.sql  # stop at the first error
+psql -d mydb -c &quot;SELECT 1&quot; --csv &gt; out.csv      # one query to CSV (PG 12+)
+pg_dump -d mydb -f backup.sql                   # full backup as SQL
+pg_dump -d mydb -t orders -f orders.sql         # one table only
+psql -d newdb -f backup.sql                     # restore a plain SQL dump</code></pre>
+<h2 id="transactions-and-safety">Transactions and safety</h2>
+<p>psql autocommits by default: every <code>UPDATE</code> or <code>DELETE</code> is permanent the moment it finishes, so wrap risky changes in a transaction and check before committing.</p>
+<pre><code class="language-sql">BEGIN;
+UPDATE customers SET status = &#39;inactive&#39; WHERE last_login &lt; &#39;2024-01-01&#39;;
+-- psql reports &quot;UPDATE 342&quot; — is that the number you expected?
+SELECT count(*) FROM customers WHERE status = &#39;inactive&#39;;
+COMMIT;     -- keep it
+-- or
+ROLLBACK;   -- undo everything since BEGIN</code></pre>
+<ul><li><p>Run the <code>WHERE</code> clause as a <code>SELECT count(*)</code> first, then turn it into the <code>UPDATE</code> or <code>DELETE</code>.</p></li><li><p>After any error inside a transaction, every later statement fails until you <code>ROLLBACK</code>. <code>\set ON_ERROR_ROLLBACK interactive</code> lets you fix a typo and carry on instead.</p></li><li><p><code>\set AUTOCOMMIT off</code> makes psql open a transaction automatically, so nothing sticks until you <code>COMMIT</code>.</p></li><li><p><code>SET default_transaction_read_only = on;</code> makes the session read-only when you only mean to look.</p></li><li><p>Don&#39;t leave a transaction open and walk away: it holds locks and can block other users. Check for <code>*</code> in the prompt.</p></li><li><p>DDL (<code>CREATE</code>, <code>ALTER</code>, <code>DROP TABLE</code>) is transactional in Postgres, so it can be rolled back too; <code>TRUNCATE</code> can as well. <code>DROP DATABASE</code> and <code>VACUUM</code> cannot run in a transaction.</p></li></ul>
+<h2 id="gotchas-for-mysql-and-other-db-users">Gotchas for MySQL and other DB users</h2>
+<p>Most confusion comes from quoting and case rules, so check these first when something &quot;doesn&#39;t exist&quot;.</p>
+<table><thead><tr><th>You might try</th><th>In Postgres / psql</th></tr></thead><tbody><tr><td><code>SHOW DATABASES;</code></td><td><code>\l</code></td></tr><tr><td><code>USE mydb;</code></td><td><code>\c mydb</code></td></tr><tr><td><code>SHOW TABLES;</code></td><td><code>\dt</code></td></tr><tr><td><code>DESCRIBE t;</code></td><td><code>\d t</code></td></tr><tr><td><code>SHOW PROCESSLIST;</code></td><td><code>SELECT * FROM pg_stat_activity;</code></td></tr><tr><td><code>&quot;text&quot;</code> for strings</td><td><code>&#39;text&#39;</code> — double quotes mean an identifier (column/table name)</td></tr><tr><td><code>`backticks`</code> for names</td><td><code>&quot;double quotes&quot;</code></td></tr><tr><td><code>AUTO_INCREMENT</code></td><td><code>GENERATED ALWAYS AS IDENTITY</code> (or older <code>SERIAL</code>)</td></tr><tr><td><code>LIMIT 10, 20</code></td><td><code>LIMIT 20 OFFSET 10</code></td></tr><tr><td><code>IFNULL(a, b)</code></td><td><code>COALESCE(a, b)</code></td></tr><tr><td><code>exit</code></td><td><code>\q</code> (PG 11+ also accepts <code>exit</code> and <code>quit</code>)</td></tr></tbody></table>
+<ul><li><p>Unquoted names are folded to lowercase: <code>SELECT * FROM Users</code> looks for <code>users</code>. A table created as <code>&quot;Users&quot;</code> must always be written <code>&quot;Users&quot;</code>.</p></li><li><p><code>LIKE</code> is case-sensitive; use <code>ILIKE</code> for case-insensitive matching.</p></li><li><p>String concatenation is <code>a || b</code> (or <code>concat(a, b)</code>); <code>||</code> is not OR.</p></li><li><p><code>NULL = NULL</code> is not true; use <code>IS NULL</code> / <code>IS DISTINCT FROM</code>.</p></li><li><p>&quot;Role does not exist&quot; on connect usually means you didn&#39;t pass <code>-U</code> and psql used your OS username.</p></li><li><p>&quot;Peer authentication failed&quot; means local connections are tied to OS users; try <code>-h localhost</code> or <code>sudo -u postgres psql</code>.</p></li></ul>
+</main></body></html>
